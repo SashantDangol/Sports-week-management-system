@@ -33,7 +33,13 @@
    ============================================================ */
 
 
-// ── Basic helpers ─────────────────────────────────────────────
+/**
+ * Fetches distinct users registered for the specified sport, optionally filtered by registration gender.
+ *
+ * @param int $eventSportId The event sport identifier to match against registrations.
+ * @param string|null $gender Optional registration gender to filter results (e.g., 'male', 'female'); pass null to omit gender filtering.
+ * @return array An ordered list (by full_name) of rows each containing `id` and `full_name` for matching users.
+ */
 
 function getPlayersForSport($pdo, $eventSportId, $gender = null): array {
     $sql    = "SELECT DISTINCT u.id, u.full_name
@@ -48,6 +54,12 @@ function getPlayersForSport($pdo, $eventSportId, $gender = null): array {
     return $stmt->fetchAll();
 }
 
+/**
+ * Fetches teams associated with an event sport, ordered by team name.
+ *
+ * @param int $eventSportId The `event_sport` identifier to filter teams by.
+ * @return array<int, array{ id: mixed, full_name: string }> Ordered list of teams with keys `id` and `full_name` (team_name).
+ */
 function getTeamsForSport($pdo, $eventSportId): array {
     $stmt = $pdo->prepare("SELECT id, team_name AS full_name FROM teams
                            WHERE event_sport_id = ? ORDER BY team_name");
@@ -55,6 +67,12 @@ function getTeamsForSport($pdo, $eventSportId): array {
     return $stmt->fetchAll();
 }
 
+/**
+ * Compute the smallest power of two greater than or equal to the given integer.
+ *
+ * @param int $n The input integer.
+ * @return int The smallest power of two that is >= $n (returns 1 for values <= 1).
+ */
 function nextPowerOfTwo(int $n): int {
     $p = 1;
     while ($p < $n) $p *= 2;
@@ -62,9 +80,11 @@ function nextPowerOfTwo(int $n): int {
 }
 
 /**
- * Resolve a participant to individual user IDs for conflict checking.
- * Individual sport  → [$participantId]
- * Team sport        → all team_members user IDs
+ * Map a participant identifier to the individual user IDs used for conflict checking.
+ *
+ * @param int|null $participantId The participant identifier: a user ID when not a team, or a team ID when `$isTeamSport` is true; if falsy, no users are returned.
+ * @param bool $isTeamSport Whether the participant represents a team (`true`) or an individual (`false`).
+ * @return int[] An array of user IDs belonging to the participant; empty if `$participantId` is falsy or the team has no members.
  */
 function resolveParticipantToUsers($pdo, $participantId, bool $isTeamSport): array {
     if (!$participantId) return [];
@@ -87,6 +107,17 @@ class TimeSlotManager {
     private int      $slotMinutes;
     private array    $busyMap;
 
+    /**
+     * Initialize the time-slot manager with the event window, slot duration, and existing busy intervals.
+     *
+     * Sets the internal clock to the provided event start datetime and extracts the per-day window start
+     * and end hours/minutes used for slot allocation.
+     *
+     * @param string $eventStartDatetime Datetime string used to set the initial scheduling clock and daily window start.
+     * @param string $eventEndDatetime Datetime string used to determine the daily window end time.
+     * @param int $slotMinutes Duration of each scheduling slot in minutes.
+     * @param array $busyMap Initial map of busy intervals keyed by user id (each value is an array of intervals).
+     */
     public function __construct(
         string $eventStartDatetime,
         string $eventEndDatetime,
@@ -106,10 +137,14 @@ class TimeSlotManager {
     }
 
     /**
-     * Find the earliest slot from the current clock at which all
-     * $userIds are free, respecting the daily window.
-     * Advances the clock to slot_end and returns slot_start.
-     */
+         * Finds the next available time slot at or after the manager's current clock where all specified users are free and the full slot fits inside the daily window.
+         *
+         * Marks the users busy for the allocated interval and advances the manager's internal clock to the end of that slot.
+         *
+         * @param int[] $userIds List of user IDs to check for conflicts; an empty array means no conflict checks.
+         * @return DateTime The start time of the allocated slot.
+         * @throws Exception If no suitable slot is found within the internal search limit.
+         */
     public function allocate(array $userIds): DateTime {
         $slot  = clone $this->clock;
         $limit = 20000;
@@ -139,24 +174,55 @@ class TimeSlotManager {
         );
     }
 
-    // ── private helpers ───────────────────────────────────────
+    /**
+     * Compute the daily window end for the given date using the manager's configured end hour and minute.
+     *
+     * @param DateTime $dt The date for which to compute the day-end.
+     * @return DateTime A cloned DateTime set to the same date with time set to this manager's configured end hour and minute.
+     */
 
     private function dayEndFor(DateTime $dt): DateTime {
         return (clone $dt)->setTime($this->endHour, $this->endMin, 0);
     }
 
+    /**
+     * Compute the daily window start for the given date using the manager's configured start hour and minute.
+     *
+     * @param DateTime $dt The date for which to compute the window start.
+     * @return DateTime A DateTime set to the same date as `$dt` with time set to the manager's start hour and minute.
+     */
     private function dayStartFor(DateTime $dt): DateTime {
         return (clone $dt)->setTime($this->startHour, $this->startMin, 0);
     }
 
+    /**
+     * Snap a DateTime into the daily scheduling window by moving times at or after the day's end to the next day's window start.
+     *
+     * @param DateTime $dt The date/time to snap.
+     * @return DateTime The original `$dt` if it falls before the day's end; otherwise the next day's window start.
+     */
     private function snapToDayWindow(DateTime $dt): DateTime {
         return $dt >= $this->dayEndFor($dt) ? $this->nextDayStart($dt) : $dt;
     }
 
+    /**
+     * Get the scheduling window start for the day after the given date.
+     *
+     * @param DateTime $dt Reference date from which to compute the next day's window.
+     * @return DateTime The start datetime of the daily window on the next calendar day.
+     */
     private function nextDayStart(DateTime $dt): DateTime {
         return $this->dayStartFor((clone $dt)->modify('+1 day'));
     }
 
+    /**
+     * Checks whether any of the given users has a busy interval that overlaps the specified time range.
+     *
+     * @param int[] $uids User IDs to check for conflicts.
+     * @param DateTime $s Start of the interval to test.
+     * @param DateTime $e End of the interval to test.
+     * @return bool `true` if any user's busy interval overlaps the interval (i.e. `start < busy.end` and `end > busy.start`), `false` otherwise.
+     */
     private function hasConflict(array $uids, DateTime $s, DateTime $e): bool {
         foreach ($uids as $uid) {
             foreach ($this->busyMap[$uid] ?? [] as $b) {
@@ -166,6 +232,16 @@ class TimeSlotManager {
         return false;
     }
 
+    /**
+     * Mark the given users as busy for the specified time interval.
+     *
+     * Each user's busy list receives a cloned interval entry with the provided start (inclusive)
+     * and end (exclusive) datetimes.
+     *
+     * @param int[]    $uids List of user IDs to mark busy.
+     * @param DateTime $s    Start of the busy interval (inclusive).
+     * @param DateTime $e    End of the busy interval (exclusive).
+     */
     private function markBusy(array $uids, DateTime $s, DateTime $e): void {
         foreach ($uids as $uid) {
             $this->busyMap[$uid][] = ['start' => clone $s, 'end' => clone $e];
@@ -174,7 +250,20 @@ class TimeSlotManager {
 }
 
 
-// ── Seeding ───────────────────────────────────────────────────
+/**
+ * Produces a bracket-sized ordered list of participants by inserting BYE entries as needed.
+ *
+ * Takes the provided participants (some may already be marked as BYE) and returns an array
+ * of length `$bracketSize` where real participants retain their original entries and
+ * additional BYE entries are inserted to fill remaining slots. BYE entries are represented
+ * as `['id' => null, 'full_name' => 'BYE', 'is_bye' => true]` and are distributed to
+ * balance the bracket according to seeding parity.
+ *
+ * @param array $players List of participant records; records may include an `'is_bye'` flag.
+ * @param int $bracketSize Desired total number of slots in the bracket (power-of-two).
+ * @return array An ordered array of length `$bracketSize` containing original participant
+ *               records and inserted BYE records where necessary.
+ */
 
 function seedPlayers(array $players, int $bracketSize): array {
     $real       = array_values(array_filter($players, fn($p) => !isset($p['is_bye'])));
@@ -201,7 +290,18 @@ function seedPlayers(array $players, int $bracketSize): array {
 }
 
 
-// ── BYE auto-advance ──────────────────────────────────────────
+/**
+ * Marks round‑1 matches that include BYEs as completed and advances any real participant.
+ *
+ * For round 1 matches of the given event sport (and optional gender/stage), this updates matches
+ * where exactly one player is marked as a BYE by setting the non‑BYE player as the winner,
+ * recording both scores as `'BYE'`, and advancing that winner into the next match slot.
+ * If both players are BYEs the match is marked completed. Matches without BYEs are untouched.
+ *
+ * @param int $eventSportId The event_sports.id value identifying the sport event.
+ * @param string|null $gender Optional gender filter applied to matched rows; pass null to ignore.
+ * @param string $stage The bracket stage to process (default: 'stage1').
+ */
 
 function autoAdvanceByes($pdo, $eventSportId, $gender = null, string $stage = 'stage1'): void {
     $sql    = "SELECT * FROM matches
@@ -234,6 +334,18 @@ function autoAdvanceByes($pdo, $eventSportId, $gender = null, string $stage = 's
     }
 }
 
+/**
+ * Advance a match winner into the next scheduled match's first available player slot.
+ *
+ * If the completed match has a `next_match_id` and that next match exists, inserts the winner's id
+ * and name into the first empty player slot (`player1` if empty, otherwise `player2`) and clears
+ * the corresponding `is_player*_bye` flag. Does nothing if `next_match_id` is missing or the next
+ * match cannot be found.
+ *
+ * @param int $matchId The ID of the completed match whose winner is advancing.
+ * @param int|null $winnerId The advancing winner's user or participant ID.
+ * @param string $winnerName The advancing winner's display name.
+ */
 function advanceWinner($pdo, $matchId, $winnerId, $winnerName): void {
     $stmt = $pdo->prepare("SELECT next_match_id FROM matches WHERE id=?");
     $stmt->execute([$matchId]);
@@ -258,8 +370,12 @@ function advanceWinner($pdo, $matchId, $winnerId, $winnerName): void {
 // ── Shared slot allocator for a participant pair ──────────────
 
 /**
- * Returns userIds for both participants (handles team or individual).
- * BYE slots contribute no user IDs so they skip conflict checks.
+ * Collects unique user IDs represented by two bracket participants, skipping BYE slots.
+ *
+ * @param array $p1 Participant data for player one. Expected keys: `'id'` (participant id) and optional `'is_bye'`.
+ * @param array $p2 Participant data for player two. Expected keys: `'id'` (participant id) and optional `'is_bye'`.
+ * @param bool $isTeam True when participants are teams; false when participants are individual users.
+ * @return int[] Unique user IDs for both participants (empty if both are BYEs).
  */
 function participantUserIds($pdo, array $p1, array $p2, bool $isTeam): array {
     $ids = [];
@@ -276,7 +392,24 @@ function participantUserIds($pdo, array $p1, array $p2, bool $isTeam): array {
 // ═══════════════════════════════════════════════════════════════
 // SINGLE ELIMINATION
 // (covers single_elim_one and single_elim_two — same structure)
-// ═══════════════════════════════════════════════════════════════
+/**
+ * Build and persist a single-elimination bracket for the given participants and schedule its matches.
+ *
+ * Pads participants with BYEs to the next power-of-two, seeds participants, creates and inserts round-1 match rows
+ * (scheduling each match while respecting user busy intervals), creates subsequent-round match placeholders linked
+ * via `next_match_id`, advances BYE winners for stage 'stage1', and increments the shared match counter.
+ *
+ * @param PDO $pdo Database connection used to insert and update match rows.
+ * @param int $eventSportId Identifier of the event sport for which the bracket is being generated.
+ * @param array $participants Ordered list of participants; each item is an associative array with at least `id` and `full_name`, and optional `is_bye`.
+ * @param bool $isTeam True when participants represent teams (affects user-resolution for conflict checking).
+ * @param string $gender Gender value to store on match rows (use 'none' to indicate no gender filter).
+ * @param string $startTime Datetime string used as the earliest possible scheduled time for matches (e.g., event start).
+ * @param int $avgGameTime Average match duration in minutes used to size scheduling slots.
+ * @param string $eventEndDateTime Datetime string that defines the event scheduling window end for the TimeSlotManager.
+ * @param array &$busyMap Reference to the shared busy-interval map used and mutated by the scheduler; entries are appended for allocated slots.
+ * @param int &$matchNum Reference to a shared match-number counter; the function increments this as it inserts matches.
+ */
 
 function generateSingleElimBracket(
     $pdo,
@@ -380,7 +513,24 @@ function generateSingleElimBracket(
 //
 // Scheduling: Winners rounds first (they're known), then Losers
 //   rounds interleaved to respect day boundaries, then Grand Final.
-// ═══════════════════════════════════════════════════════════════
+/**
+ * Builds and schedules a full double-elimination bracket and inserts all matches into the database.
+ *
+ * Seeds participants (adding BYEs to the next power-of-two), constructs the winners and losers brackets
+ * (including inter-bracket links via `next_match_id` and `loser_match_id`), schedules every match
+ * using a TimeSlotManager that respects per-user busy intervals, and auto-advances BYE results in the
+ * winners bracket.
+ *
+ * @param int $eventSportId The event_sport identifier for which matches are created.
+ * @param array $participants Array of participant entries (each item with keys `id`, `full_name` and optional `is_bye`).
+ * @param bool $isTeam True when participants represent teams, false for individual participants.
+ * @param string $gender Gender tag stored on created matches (use `'none'` to leave gender unset for auto-advancement).
+ * @param string $startTime Event start datetime string used to initialize per-sport scheduling cursor.
+ * @param int $avgGameTime Average game duration in minutes used to size scheduling slots.
+ * @param string $eventEndDateTime Event end datetime string used to bound daily scheduling windows.
+ * @param array &$busyMap Reference to a map of busy intervals per user id; this function reads and appends intervals when scheduling.
+ * @param int &$matchNum Reference to the next match_number to use; incremented for every inserted match.
+ */
 
 function generateDoubleElimBracket(
     $pdo,
@@ -654,7 +804,23 @@ function generateDoubleElimBracket(
 
 // ═══════════════════════════════════════════════════════════════
 // ROUND ROBIN
-// ═══════════════════════════════════════════════════════════════
+/**
+ * Generate and insert a round-robin schedule for the given participants and allocate time slots.
+ *
+ * Inserts match rows into the `matches` table for each non-BYE pairing using the circle-method
+ * rotation and schedules each fixture with TimeSlotManager while observing and updating the
+ * provided busy map.
+ *
+ * @param int $eventSportId The event_sports.id for which matches are being created.
+ * @param array $participants List of participant records (each must include `id` and `full_name`; a phantom BYE may be present as `['id'=>null,'full_name'=>'BYE','is_bye'=>true]`).
+ * @param bool $isTeam True when participants represent teams (affects participant-to-user resolution).
+ * @param string $gender Gender value to store on created matches.
+ * @param string $startTime Event start datetime string used to initialize the scheduler.
+ * @param int $avgGameTime Average match duration in minutes used to size time slots.
+ * @param string $eventEndDateTime Event end datetime string used to bound scheduling.
+ * @param array &$busyMap By-reference map of user busy intervals used for conflict detection; this function updates the map via the TimeSlotManager when allocating slots.
+ * @param int &$matchNum By-reference match number counter; incremented for every produced (or skipped due to phantom BYE) match and used as the `match_number` and `bracket_position` for inserted rows.
+ */
 
 function generateRoundRobinBracket(
     $pdo,
@@ -733,7 +899,18 @@ function generateRoundRobinBracket(
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Generate bracket for an individual sport (dispatches by bracket_type).
+ * Build and insert a match schedule for an individual sport, selecting the bracket generator
+ * based on the event's `bracket_type`.
+ *
+ * @param PDO $pdo Database connection used for reads and match/team inserts.
+ * @param int $eventSportId ID of the event_sports row to generate a bracket for.
+ * @param string $startTime ISO 8601 datetime (or MySQL datetime string) representing the earliest desired match start.
+ * @param int $avgGameTime Average match duration in minutes used to size scheduling slots.
+ * @param string $placementType Placement strategy; when `'random'` participants are shuffled before seeding.
+ * @param string $eventEndDateTime ISO 8601 datetime (or MySQL datetime string) indicating the final scheduling boundary.
+ * @param string|null $gender Optional gender filter used when fetching registered players; `null` uses both/neutral.
+ * @param array &$busyMap Reference to the shared busy-interval map used by the scheduler to avoid conflicts.
+ * @return bool `true` if a bracket generation routine was executed; `false` when there are fewer than two registered players.
  */
 function generateBracket(
     $pdo,
@@ -786,7 +963,19 @@ function generateBracket(
 }
 
 /**
- * Generate bracket for a team sport (dispatches by bracket_type).
+ * Builds and inserts a competition bracket for a team sport, selecting the bracket type from event_sports.
+ *
+ * Generates and schedules matches by dispatching to the appropriate generator (single-elim, double-elim, or
+ * round-robin) and persists them to the database. When `$placementType` is `"random"`, team order is randomized
+ * before seeding.
+ *
+ * @param int $eventSportId The event_sports.id identifying the sport.
+ * @param string $startTime The event start datetime used as the initial scheduling cursor.
+ * @param int $avgGameTime Average match duration in minutes used for slot allocation.
+ * @param string $placementType `"random"` to shuffle teams; other values preserve the fetched order.
+ * @param string $eventEndDateTime The event end datetime used to define daily scheduling windows.
+ * @param array &$busyMap Reference to the shared busy-map for conflict-aware scheduling; modified in-place.
+ * @return bool `true` if bracket generation was performed, `false` if there were fewer than two teams.
  */
 function generateTeamBracket(
     $pdo,
@@ -843,7 +1032,12 @@ function generateTeamBracket(
     return true;
 }
 
-/** Return the next available match_number for an event_sport. */
+/**
+ * Compute the next match number for the specified event sport.
+ *
+ * @param int $eventSportId The event_sport.id to query.
+ * @return int The next available `match_number` (existing maximum + 1; `1` if none exist).
+ */
 function _nextMatchNum($pdo, int $eventSportId): int {
     $stmt = $pdo->prepare("SELECT COALESCE(MAX(match_number),0)+1 FROM matches WHERE event_sport_id=?");
     $stmt->execute([$eventSportId]);
@@ -851,7 +1045,19 @@ function _nextMatchNum($pdo, int $eventSportId): int {
 }
 
 
-// ── Auto-generate teams (unchanged) ──────────────────────────
+/**
+ * Create teams for an event sport by distributing registered players into numbered teams.
+ *
+ * Players registered for the given event sport are shuffled and assigned to up to `$maxTeams` teams.
+ * The function computes the actual number of teams based on available players and the requested
+ * `$membersPerTeam`, ensures at least two teams, and distributes any remainder players one-per-team
+ * among the first teams. Each created team is inserted into `teams` and its members into `team_members`.
+ *
+ * @param int $eventSportId The event_sport identifier to create teams for.
+ * @param int $maxTeams The maximum number of teams to create.
+ * @param int $membersPerTeam The target number of members per team used to derive the number of teams.
+ * @return bool `true` on successful team creation, `false` if fewer than two players are available.
+ */
 
 function generateTeams($pdo, $eventSportId, $maxTeams, $membersPerTeam): bool {
     $players      = getPlayersForSport($pdo, $eventSportId);
