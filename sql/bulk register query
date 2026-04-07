@@ -104,3 +104,6 @@ JOIN event_sports es1 ON r.sport1_id = es1.id
 LEFT JOIN event_sports es2 ON r.sport2_id = es2.id
 WHERE r.event_id = @event_id
 ORDER BY u.username;
+
+
+Just a test
