@@ -46,6 +46,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         $pdo->commit();
+
+        // If the admin clicked "Save & Generate Brackets", redirect straight there
+        if (($_POST['action'] ?? '') === 'generate') {
+            header('Location: generate_brackets.php?event_id=' . $eventId);
+            exit();
+        }
+
         $success = 'Sports configured successfully!';
         
         // Refresh data
@@ -156,7 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endforeach; ?>
         
         <div class="form-actions">
-            <button type="submit" class="btn btn-primary">Save Configuration</button>
+            <button type="submit" name="action" value="save" class="btn btn-primary">Save Configuration</button>
             <?php 
             // Check if there are team sports
             $hasTeamSports = false;
@@ -170,7 +177,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php if ($hasTeamSports): ?>
                 <a href="team_formation.php?event_id=<?= $eventId ?>" class="btn btn-secondary">Form Teams</a>
             <?php endif; ?>
-            <a href="start_tournament.php?event_id=<?= $eventId ?>" class="btn btn-success">Start Tournament →</a>
+            <button type="submit" name="action" value="generate" class="btn btn-success">Save &amp; Generate Brackets →</button>
         </div>
     </form>
 </div>
@@ -184,4 +191,3 @@ document.querySelectorAll('.format-select').forEach(select => {
     });
 });
 </script>
-

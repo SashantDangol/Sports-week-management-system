@@ -121,11 +121,7 @@ $completedEvents = array_filter($events, fn($e) => $e['status'] === 'completed')
                             </div>
                             <div class="event-actions">
                                 <a href="view_registrations.php?event_id=<?= $event['id'] ?>" class="btn btn-sm btn-secondary">View Registrations</a>
-                                <?php 
-                                $today = date('Y-m-d');
-                                if ($today < $event['reg_end_date']): ?>
-                                    <a href="end_registration.php?event_id=<?= $event['id'] ?>" class="btn btn-sm btn-danger" data-confirm="End registration for this event now?">End Registration</a>
-                                <?php endif; ?>
+                                <a href="end_registration.php?event_id=<?= $event['id'] ?>" class="btn btn-sm btn-danger" onclick="return confirm('End registration for this event now?')">End Registration</a>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -234,5 +230,3 @@ $completedEvents = array_filter($events, fn($e) => $e['status'] === 'completed')
         </section>
     </div>
 </div>
-
-

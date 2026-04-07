@@ -43,26 +43,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if ($match && $winnerId) {
             $winnerName = ($winnerId == $match['player1_id']) ? $match['player1_name'] : $match['player2_name'];
-            
+            $loserId    = ($winnerId == $match['player1_id']) ? $match['player2_id']   : $match['player1_id'];
+            $loserName  = ($winnerId == $match['player1_id']) ? $match['player2_name'] : $match['player1_name'];
+
             $pdo->prepare("UPDATE matches SET score1 = ?, score2 = ?, winner_id = ?, winner_name = ?, status = 'completed' WHERE id = ?")
                 ->execute([$score1, $score2, $winnerId, $winnerName, $matchId]);
-            
+
             advanceWinner($pdo, $matchId, $winnerId, $winnerName);
+            // Route loser into losers bracket (double elimination)
+            if ($loserId) advanceLoser($pdo, $matchId, $loserId, $loserName);
         }
     } elseif ($action === 'disqualify' && $matchId) {
         $disqualifiedId = intval($_POST['disqualified_id'] ?? 0);
         $match = $pdo->prepare("SELECT * FROM matches WHERE id = ?");
         $match->execute([$matchId]);
         $match = $match->fetch();
-        
+
         if ($match && $disqualifiedId) {
-            $winnerId = ($disqualifiedId == $match['player1_id']) ? $match['player2_id'] : $match['player1_id'];
-            $winnerName = ($winnerId == $match['player1_id']) ? $match['player1_name'] : $match['player2_name'];
-            
+            $winnerId   = ($disqualifiedId == $match['player1_id']) ? $match['player2_id']   : $match['player1_id'];
+            $winnerName = ($winnerId == $match['player1_id'])        ? $match['player1_name'] : $match['player2_name'];
+            $loserId    = $disqualifiedId;
+            $loserName  = ($loserId == $match['player1_id'])         ? $match['player1_name'] : $match['player2_name'];
+
             $pdo->prepare("UPDATE matches SET winner_id = ?, winner_name = ?, status = 'disqualified', score1 = 'DQ', score2 = 'DQ' WHERE id = ?")
                 ->execute([$winnerId, $winnerName, $matchId]);
-            
+
             advanceWinner($pdo, $matchId, $winnerId, $winnerName);
+            if ($loserId) advanceLoser($pdo, $matchId, $loserId, $loserName);
         }
     } elseif ($action === 'end_event') {
         // Generate results
@@ -130,9 +137,6 @@ function generateResults($pdo, $eventSportId) {
         <h1>Manage: <?= htmlspecialchars($event['name']) ?></h1>
         <div>
             <a href="view_brackets.php?event_id=<?= $eventId ?>" class="btn btn-secondary">View Brackets</a>
-            <?php if ($currentSport && !empty($currentSport['is_team_sport'])): ?>
-                <a href="manage_teams.php?event_id=<?= $eventId ?>&sport_id=<?= $sportId ?>" class="btn btn-secondary">Manage Teams</a>
-            <?php endif; ?>
             <form method="POST" style="display:inline">
                 <input type="hidden" name="action" value="end_event">
                 <button type="submit" class="btn btn-danger" onclick="return confirm('End this event? This will generate final results.')">🏁 End Event</button>
@@ -153,9 +157,60 @@ function generateResults($pdo, $eventSportId) {
     <?php if ($currentSport): ?>
         <h2><?= htmlspecialchars($currentSport['sport_name']) ?> - Matches</h2>
         
-        <?php foreach ($rounds as $roundNum => $roundMatches): ?>
+        <?php
+        $bracketType = $currentSport['bracket_type'] ?? 'single_elim_one';
+        
+        // For double elim, separate WB/LB/GF
+        if ($bracketType === 'double_elim') {
+            $wbRounds = []; $lbRounds = [];
+            foreach ($rounds as $rn => $rm) {
+                $stage = $rm[0]['stage'] ?? 'stage1';
+                if ($stage === 'stage2') $lbRounds[$rn] = $rm;
+                else $wbRounds[$rn] = $rm;
+            }
+            $grandFinalRound  = !empty($wbRounds) ? max(array_keys($wbRounds)) : null;
+            $wbOnlyRounds     = array_filter($wbRounds, fn($k) => $k < $grandFinalRound, ARRAY_FILTER_USE_KEY);
+            $roundSections    = [
+                'Winners Bracket' => $wbOnlyRounds,
+                'Losers Bracket'  => $lbRounds,
+                'Grand Final'     => $grandFinalRound && isset($wbRounds[$grandFinalRound]) ? [$grandFinalRound => $wbRounds[$grandFinalRound]] : [],
+            ];
+        } elseif ($bracketType === 'round_robin') {
+            $roundSections = ['Round Robin Matches' => $rounds];
+        } else {
+            $roundSections = ['Bracket' => $rounds];
+        }
+
+        foreach ($roundSections as $sectionTitle => $sectionRounds):
+            if (empty($sectionRounds)) continue;
+        ?>
+        <h3 style="margin-top:1.5rem;margin-bottom:0.5rem"><?= $sectionTitle ?></h3>
+        <?php
+        $roundCount = count($sectionRounds);
+        $roundIdx   = 1;
+        foreach ($sectionRounds as $roundNum => $roundMatches):
+        ?>
             <div class="round-section">
-                <h3>Round <?= $roundNum ?> <?= $roundNum == count($rounds) ? '(Final)' : '' ?></h3>
+                <h3>
+                    <?php
+                    if ($bracketType === 'round_robin') {
+                        echo "Round $roundNum";
+                    } elseif ($sectionTitle === 'Grand Final') {
+                        echo "Grand Final";
+                    } elseif ($sectionTitle === 'Winners Bracket') {
+                        if ($roundIdx == $roundCount) echo 'WB Final';
+                        elseif ($roundIdx == $roundCount - 1) echo 'WB Semi-Finals';
+                        else echo "WB Round $roundIdx";
+                    } elseif ($sectionTitle === 'Losers Bracket') {
+                        if ($roundIdx == $roundCount) echo 'LB Final';
+                        else echo "LB Round $roundIdx";
+                    } else {
+                        if ($roundNum == count($rounds)) echo 'Final';
+                        elseif ($roundNum == count($rounds) - 1) echo 'Semi-Finals';
+                        else echo "Round $roundNum";
+                    }
+                    ?>
+                </h3>
                 <div class="matches-list">
                     <?php foreach ($roundMatches as $match): ?>
                         <div class="match-card <?= $match['status'] ?>">
@@ -212,6 +267,7 @@ function generateResults($pdo, $eventSportId) {
                     <?php endforeach; ?>
                 </div>
             </div>
+        <?php $roundIdx++; endforeach; ?>
         <?php endforeach; ?>
     <?php endif; ?>
 </div>
