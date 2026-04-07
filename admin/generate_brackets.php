@@ -21,40 +21,41 @@ $error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     try {
         $pdo->beginTransaction();
-        
+
         // Delete existing brackets (keep teams as configured by admin)
         foreach ($eventSports as $es) {
             $pdo->prepare("DELETE FROM matches WHERE event_sport_id = ?")->execute([$es['id']]);
         }
-        
-        $startTime = $event['event_start_date'] . ' ' . $event['event_start_time'];
-        $eventEndDateTime = $event['event_end_date'] . ' ' . $event['event_end_time'];
-        
+
+        $startTime        = $event['event_start_date'] . ' ' . $event['event_start_time'];
+        $eventEndDateTime = $event['event_end_date']   . ' ' . $event['event_end_time'];
+
+        // Shared busy-map: uid -> [['start'=>DateTime,'end'=>DateTime], ...]
+        // Passed by reference so conflict checks span across all sports.
+        $busyMap = [];
+
         foreach ($eventSports as $es) {
             if ($es['is_team_sport']) {
-                // Team sports: use teams configured by admin
-                generateTeamBracket($pdo, $es['id'], $startTime, $es['avg_game_time'], $es['placement_type'], $eventEndDateTime);
+                generateTeamBracket(
+                    $pdo, $es['id'], $startTime,
+                    (int)$es['avg_game_time'], $es['placement_type'],
+                    $eventEndDateTime, $busyMap
+                );
             } else {
-                // Individual sports: generate separate brackets per gender
-                foreach (['male','female','other'] as $gender) {
+                foreach (['male', 'female', 'other'] as $gender) {
                     $players = getPlayersForSport($pdo, $es['id'], $gender);
-                    if (count($players) < 2) {
-                        continue;
-                    }
-                    
-                    if ($es['placement_type'] === 'random') {
-                        generateBracket($pdo, $es['id'], $startTime, $es['avg_game_time'], 'random', $eventEndDateTime, $gender);
-                    } else {
-                        // For manual, create empty bracket per gender
-                        generateBracket($pdo, $es['id'], $startTime, $es['avg_game_time'], 'manual', $eventEndDateTime, $gender);
-                    }
+                    if (count($players) < 2) continue;
+
+                    generateBracket(
+                        $pdo, $es['id'], $startTime,
+                        (int)$es['avg_game_time'], $es['placement_type'],
+                        $eventEndDateTime, $gender, $busyMap
+                    );
                 }
             }
         }
-        
-        // Update event status
-        $pdo->prepare("UPDATE events SET status = 'ongoing' WHERE id = ?")->execute([$eventId]);
-        
+
+        $pdo->prepare("UPDATE events SET status='ongoing' WHERE id=?")->execute([$eventId]);
         $pdo->commit();
         $message = 'Brackets generated successfully! Event is now ongoing.';
     } catch (Exception $e) {
@@ -101,5 +102,3 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
     </div>
 </div>
-
-

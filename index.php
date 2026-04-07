@@ -148,15 +148,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
             </div>
             <form method="POST" class="login-form-modal">
                 <?php if ($error): ?>
-                    <div class="alert alert-error"><?= htmlspecialchars($error) ?></div>
+                    <div class="alert alert-error">
+                        <strong>⚠️</strong> <?= htmlspecialchars($error) ?>
+                    </div>
                 <?php endif; ?>
                 <div class="form-group">
                     <label for="username">Username</label>
-                    <input type="text" id="username" name="username" placeholder="Enter your username" required>
+                    <input type="text" id="username" name="username"
+                           placeholder="Enter your username"
+                           value="<?= htmlspecialchars($_POST['username'] ?? '') ?>"
+                           required autocomplete="username">
                 </div>
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" name="password" placeholder="Enter your password" required>
+                    <input type="password" id="password" name="password"
+                           placeholder="Enter your password"
+                           required autocomplete="current-password">
                 </div>
                 <div style="margin-top: 1rem;"></div>
                 <button type="submit" name="login" class="btn btn-primary btn-full">Login</button>
@@ -181,24 +188,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
             openLoginModal();
         }
 
-        // Close modal when clicking outside
+        // Auto-open the modal when there is a login error (PHP set $error)
+        <?php if ($error): ?>
+        document.addEventListener('DOMContentLoaded', function () {
+            openLoginModal();
+            // Focus the password field if username is already filled, else focus username
+            var usr = document.getElementById('username');
+            var pwd = document.getElementById('password');
+            if (usr.value.trim() !== '') {
+                pwd.focus();
+            } else {
+                usr.focus();
+            }
+        });
+        <?php endif; ?>
+
+        // Close modal when clicking the backdrop
         window.onclick = function(event) {
             const modal = document.getElementById('loginModal');
-            if (event.target == modal) {
+            if (event.target === modal) {
                 closeLoginModal();
             }
-        }
+        };
 
-        // Smooth scrolling for navigation links
+        // Smooth scrolling for anchor links
         document.querySelectorAll('a[href^="#"]').forEach(anchor => {
             anchor.addEventListener('click', function (e) {
                 e.preventDefault();
                 const target = document.querySelector(this.getAttribute('href'));
                 if (target) {
-                    target.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                    });
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 }
             });
         });

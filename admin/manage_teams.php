@@ -222,6 +222,3 @@ $unassigned = array_filter($allPlayers, fn($p) => !isset($playerTeams[$p['id']])
         </div>
     </div>
 </div>
-
-
-

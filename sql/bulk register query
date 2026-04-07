@@ -1,0 +1,109 @@
+-- ============================================================
+--  BULK REGISTER ALL 46 STUDENTS — Sports Week
+--  Run this in phpMyAdmin > SQL tab (or MySQL CLI)
+--  Make sure you have already:
+--    1. Created the "Sports Week" event through the admin UI
+--    2. Chosen Basketball and Chess as the two sports
+--  Then run this script.
+-- ============================================================
+
+USE sports_event_db;
+
+-- -------------------------------------------------------
+-- STEP 1: Find the event ID and sport IDs dynamically
+--         so the script works regardless of what IDs
+--         MySQL auto-assigned when you created them.
+-- -------------------------------------------------------
+
+SET @event_id = (
+    SELECT id FROM events
+    WHERE name = 'Sports Week'
+    ORDER BY id DESC
+    LIMIT 1
+);
+
+SET @basketball_id = (
+    SELECT id FROM event_sports
+    WHERE event_id = @event_id
+      AND sport_name = 'Basketball'
+    LIMIT 1
+);
+
+SET @chess_id = (
+    SELECT id FROM event_sports
+    WHERE event_id = @event_id
+      AND sport_name = 'Chess'
+    LIMIT 1
+);
+
+-- Quick sanity check — run SELECT @event_id, @basketball_id, @chess_id;
+-- to confirm all three variables resolved before continuing.
+
+-- -------------------------------------------------------
+-- STEP 2: Register all 46 students
+--
+--  • sport1_id  = Basketball (team sport)
+--  • sport2_id  = Chess (individual)
+--  • Each student registers for BOTH sports.
+--    If you want some students to register for only one,
+--    just set sport2_id = NULL for those rows.
+--
+--  • player_name pulled from users.full_name
+--  • reg_id     pulled from users.registration_id
+--  • phone/email pulled from users table
+--  • gender is set to 'male' as a default placeholder —
+--    UPDATE the rows below if you know each student's
+--    actual gender (see the UPDATE block at the bottom).
+--
+--  The IGNORE keyword skips any student already registered
+--  so it is safe to re-run.
+-- -------------------------------------------------------
+
+INSERT IGNORE INTO registrations
+    (event_id, user_id, player_name, reg_id, phone, email, gender, sport1_id, sport2_id)
+SELECT
+    @event_id,
+    u.id,
+    u.full_name,
+    COALESCE(u.registration_id, u.username),   -- falls back to username if reg_id is NULL
+    COALESCE(u.phone, '9800000000'),            -- falls back to placeholder if phone is NULL
+    COALESCE(u.email, CONCAT(u.username, '@school.edu')), -- falls back if email is NULL
+    'male',                                     -- default gender — change per student if needed
+    @basketball_id,
+    @chess_id
+FROM users u
+WHERE u.role = 'student'
+ORDER BY u.id;
+
+-- -------------------------------------------------------
+-- STEP 3 (Optional): Update individual genders
+--         Replace the username and gender values as needed.
+-- -------------------------------------------------------
+-- Example — mark STU3, STU7, STU12 as female:
+--
+-- UPDATE registrations r
+-- JOIN users u ON r.user_id = u.id
+-- SET r.gender = 'female'
+-- WHERE r.event_id = @event_id
+--   AND u.username IN ('STU3', 'STU7', 'STU12');
+
+-- -------------------------------------------------------
+-- STEP 4: Verify — should show 46 rows
+-- -------------------------------------------------------
+SELECT
+    u.username,
+    u.full_name,
+    r.reg_id,
+    r.gender,
+    es1.sport_name  AS sport1,
+    es2.sport_name  AS sport2,
+    r.registered_at
+FROM registrations r
+JOIN users u          ON r.user_id   = u.id
+JOIN event_sports es1 ON r.sport1_id = es1.id
+LEFT JOIN event_sports es2 ON r.sport2_id = es2.id
+WHERE r.event_id = @event_id
+ORDER BY u.username;
+
+
+Just a test
